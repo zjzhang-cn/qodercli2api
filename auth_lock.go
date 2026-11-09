@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -72,6 +73,20 @@ func checkedDirectory(path string) (os.FileInfo, error) {
 	return info, nil
 }
 
+// credentialMarkerSafe validates the transaction marker without assuming POSIX
+// permission bits exist. Windows synthesizes mode bits from the read-only
+// attribute, so a 0600 request is not observable through FileMode.Perm();
+// regular-file identity is the meaningful local check there.
+func credentialMarkerSafe(info os.FileInfo) bool {
+	if info == nil || !info.Mode().IsRegular() {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return info.Mode().Perm() == 0600
+}
+
 func ensureAuthDirectory(dir string) (os.FileInfo, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
@@ -104,7 +119,7 @@ func acquireCredentialLease(ctx context.Context, dir string, options credentialL
 	if err != nil {
 		return nil, err
 	}
-	if !markerIdentity.Mode().IsRegular() || markerIdentity.Mode().Perm() != 0600 {
+	if !credentialMarkerSafe(markerIdentity) {
 		return nil, authConflict("credential transaction marker is unsafe")
 	}
 	path := marker + ".lock"
@@ -189,7 +204,7 @@ func (l *credentialLease) checkLocked() error {
 		return fail()
 	}
 	marker, err := l.options.lstat(l.marker)
-	if err != nil || !marker.Mode().IsRegular() || marker.Mode().Perm() != 0600 || !os.SameFile(l.markerIdentity, marker) {
+	if err != nil || !credentialMarkerSafe(marker) || !os.SameFile(l.markerIdentity, marker) {
 		return fail()
 	}
 	info, err := l.options.lstat(l.path)

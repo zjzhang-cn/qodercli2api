@@ -4,6 +4,7 @@
 /qodercli2api-*
 /qodercli-*
 /claude2api-*
+/*.exe
 *.log
 
 # Local credentials, settings, dumps, and state
@@ -32,3 +33,4 @@
 __pycache__/
 *.pyc
 /.venv/
+qodercli2api.exe
