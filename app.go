@@ -37,6 +37,7 @@ type appConfig struct {
 	addr            string
 	sk              string
 	authDir         string
+	vpcEndpoint     string
 	inferEndpoint   string
 	openapiEndpoint string
 	webEndpoint     string
@@ -71,11 +72,13 @@ func parseAppConfig(args []string, lookupEnv func(string) (string, bool), output
 	skFlag := trackedString{}
 	regionFlag := trackedString{}
 	patFlag := trackedString{}
+	vpcFlag := trackedString{}
 	inferFlag, openapiFlag, webFlag := trackedString{}, trackedString{}, trackedString{}
 	fs.Var(&regionFlag, "region", "region: global or cn (default global)")
 	fs.StringVar(&cfg.addr, "addr", lookupEnvOr(lookupEnv, "QODER2API_ADDR", ":8377"), "listen address")
 	fs.Var(&skFlag, "sk", "api key (sk-...) clients must present; empty disables auth check")
 	fs.StringVar(&cfg.authDir, "auth-dir", lookupEnvOr(lookupEnv, "QODER2API_AUTH_DIR", ""), "qoder auth dir (contains user + machine_id)")
+	fs.Var(&vpcFlag, "vpc-endpoint", "Qoder CN enterprise VPC instance name or domain (e.g. acme or acme.vpc.qoder.com.cn)")
 	fs.Var(&inferFlag, "endpoint", "inference endpoint override")
 	fs.Var(&openapiFlag, "openapi-endpoint", "openapi endpoint override")
 	fs.Var(&webFlag, "web-endpoint", "web base endpoint override")
@@ -117,15 +120,25 @@ func parseAppConfig(args []string, lookupEnv func(string) (string, bool), output
 		return invalidConfig(fmt.Errorf("-login-pat must not be empty"))
 	}
 	cfg.loginPAT = patFlag.value
-	cfg.region = lookupEnvOr(lookupEnv, "QODER2API_REGION", lookupEnvOr(lookupEnv, "QODER_REGION", "global"))
+	cfg.vpcEndpoint = lookupEnvOr(lookupEnv, "QODER2API_VPC_ENDPOINT", "")
+	if vpcFlag.set {
+		cfg.vpcEndpoint = vpcFlag.value
+		if strings.TrimSpace(cfg.vpcEndpoint) == "" {
+			return invalidConfig(fmt.Errorf("invalid VPC endpoint: expected an instance name or a domain under %s", vpcDomainSuffix))
+		}
+	}
+	cfg.region = lookupEnvOr(lookupEnv, "QODER2API_REGION", lookupEnvOr(lookupEnv, "QODER_REGION", ""))
 	if regionFlag.set {
 		cfg.region = regionFlag.value
+		if strings.TrimSpace(cfg.region) == "" {
+			return invalidConfig(fmt.Errorf("invalid region: expected global or cn"))
+		}
+	}
+	if err := cfg.resolveProfile(lookupEnv); err != nil {
+		return invalidConfig(err)
 	}
 	profile, err := resolveRegion(cfg.region)
 	if err != nil {
-		return invalidConfig(err)
-	}
-	if err := cfg.resolveProfile(lookupEnv); err != nil {
 		return invalidConfig(err)
 	}
 	if !cfg.login && !patFlag.set {

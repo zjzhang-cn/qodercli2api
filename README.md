@@ -82,7 +82,7 @@ QODER2API_SK="${QODER2API_SK:?请先设置强随机客户端密钥}" \
   ./bin/qodercli2api -region cn -addr 127.0.0.1:8377
 ```
 
-区域优先级为 **`-region` > `QODER2API_REGION` > `QODER_REGION` > `global`**。
+区域优先级为 **`-region` > `QODER2API_REGION` > `QODER_REGION` > `global`**；设置 VPC endpoint 且未显式指定区域时默认 `cn`。
 也可在登录和服务进程中统一设置 `QODER2API_REGION=cn`；一次 `-login -region cn` 不会改变后续进程的默认区域。
 `QODER_REGION` 是本项目的兼容别名，不是官方 CLI 的国内站切换参数。
 
@@ -96,6 +96,30 @@ QODER2API_SK="${QODER2API_SK:?请先设置强随机客户端密钥}" \
 | 官方 PAT 变量 | `QODER_PERSONAL_ACCESS_TOKEN` | `QODERCN_PERSONAL_ACCESS_TOKEN` |
 
 两站使用相同的生产设备登录 client UUID，但授权、OpenAPI、推理和目录必须成套选择；**只改浏览器网址不等于切换区域**。
+
+### 企业 VPC 专属域（CN）
+
+使用 Qoder CN 企业 VPC 实例时，只需提供实例名或专属域名：
+
+```bash
+./bin/qodercli2api -vpc-endpoint acme
+```
+
+程序按官方 Qoder CN CLI 的固定映射推导三个端点：
+
+| 用途 | 地址 |
+|---|---|
+| Web / 登录 | `https://acme.vpc.qoder.com.cn` |
+| OpenAPI | `https://acme-openapi.vpc.qoder.com.cn` |
+| 推理网关 | `https://acme-gateway.vpc.qoder.com.cn` |
+
+`-vpc-endpoint` 也接受 `acme.vpc.qoder.com.cn`、`acme-openapi.vpc.qoder.com.cn`、`acme-gateway.vpc.qoder.com.cn`，大小写不敏感；不接受路径、端口、凭据、query 或 fragment。也可使用 `QODER2API_VPC_ENDPOINT`。
+
+VPC 模式仅支持 CN：未显式指定 `-region` 时自动使用 `cn`；显式指定 `global`（或其他区域）会拒绝启动。仍可用 `-endpoint`、`-openapi-endpoint`、`-web-endpoint` 单独覆盖某个派生端点。
+
+VPC 模式默认凭据目录为 `<CN 配置根>/.vpc/<实例名>/.auth`（通常 `~/.qoder-cn/.vpc/acme/.auth`），与公网 CN 的 `~/.qoder-cn/.auth` 隔离，避免 region/issuer 绑定冲突。可用 `-auth-dir` 覆盖。若要复用官方 CLI 的 VPC 登录，请显式指向其凭据目录，并确保没有其他进程并发刷新 token。
+
+> 该能力只做端点推导，不读取官方 CLI 的 `vpc_endpoint` 设置或 `QODERCN_VPC_ENDPOINT`。项目尚未对企业 VPC 实例做真实推理验收；若实例路径或鉴权不兼容，会直接失败。
 
 ### 凭据目录与持久化
 
@@ -175,6 +199,7 @@ Responses 接口支持普通 function 工具及 custom/freeform 工具（包括 
 | `-sk` | `QODER2API_SK` | 空；为空会关闭客户端鉴权，日志提示 `api key auth=disabled` |
 | `-region` | `QODER2API_REGION`，其次 `QODER_REGION` | `global`；支持 `global` / `cn` |
 | `-auth-dir` | `QODER2API_AUTH_DIR` | 所选区域配置根下的 `.auth`；完整凭据目录 |
+| `-vpc-endpoint` | `QODER2API_VPC_ENDPOINT` | 空；Qoder CN 企业 VPC 实例名或专属域，推导三个 CN 端点并默认 `cn` |
 | `-endpoint` | `QODER2API_INFER_ENDPOINT` | 所选区域推理网关 |
 | `-openapi-endpoint` | `QODER2API_OPENAPI_ENDPOINT` | 所选区域 OpenAPI |
 | `-web-endpoint` | `QODER2API_WEB_ENDPOINT` | 所选区域授权网站 |

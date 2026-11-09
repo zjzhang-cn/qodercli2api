@@ -38,6 +38,138 @@ func TestRegionConfigProfilesAndPrecedence(t *testing.T) {
 	}
 }
 
+func TestRegionVPCConfiguration(t *testing.T) {
+	cnRoot := filepath.Join(homeDir(), ".qoder-cn")
+	tests := []struct {
+		name                 string
+		args                 []string
+		env                  map[string]string
+		region               string
+		web, api, infer, dir string
+	}{
+		{
+			name: "instance flag", args: []string{"-vpc-endpoint=acme"}, region: "cn",
+			web: "https://acme.vpc.qoder.com.cn", api: "https://acme-openapi.vpc.qoder.com.cn", infer: "https://acme-gateway.vpc.qoder.com.cn",
+			dir: filepath.Join(cnRoot, ".vpc", "acme", ".auth"),
+		},
+		{
+			name: "full web domain env", env: map[string]string{"QODER2API_VPC_ENDPOINT": "https://ACME.VPC.QODER.COM.CN/"}, region: "cn",
+			web: "https://acme.vpc.qoder.com.cn", api: "https://acme-openapi.vpc.qoder.com.cn", infer: "https://acme-gateway.vpc.qoder.com.cn",
+			dir: filepath.Join(cnRoot, ".vpc", "acme", ".auth"),
+		},
+		{
+			name: "openapi host normalizes", args: []string{"-vpc-endpoint=acme-openapi.vpc.qoder.com.cn"}, region: "cn",
+			web: "https://acme.vpc.qoder.com.cn", api: "https://acme-openapi.vpc.qoder.com.cn", infer: "https://acme-gateway.vpc.qoder.com.cn",
+			dir: filepath.Join(cnRoot, ".vpc", "acme", ".auth"),
+		},
+		{
+			name: "gateway host normalizes", args: []string{"-vpc-endpoint=acme-gateway.vpc.qoder.com.cn"}, region: "cn",
+			web: "https://acme.vpc.qoder.com.cn", api: "https://acme-openapi.vpc.qoder.com.cn", infer: "https://acme-gateway.vpc.qoder.com.cn",
+			dir: filepath.Join(cnRoot, ".vpc", "acme", ".auth"),
+		},
+		{
+			name: "cn config root", env: map[string]string{"QODER2API_VPC_ENDPOINT": "acme", "QODERCN_CONFIG_DIR": "/synthetic/cn-root"}, region: "cn",
+			web: "https://acme.vpc.qoder.com.cn", api: "https://acme-openapi.vpc.qoder.com.cn", infer: "https://acme-gateway.vpc.qoder.com.cn",
+			dir: "/synthetic/cn-root/.vpc/acme/.auth",
+		},
+		{
+			name: "explicit endpoints win", args: []string{"-vpc-endpoint=acme", "-web-endpoint=https://web.example.test", "-openapi-endpoint=https://api.example.test", "-endpoint=https://infer.example.test"}, region: "cn",
+			web: "https://web.example.test", api: "https://api.example.test", infer: "https://infer.example.test",
+			dir: filepath.Join(cnRoot, ".vpc", "acme", ".auth"),
+		},
+		{
+			name: "explicit auth dir wins", args: []string{"-vpc-endpoint=acme", "-auth-dir=/synthetic/vpc-auth"}, region: "cn",
+			web: "https://acme.vpc.qoder.com.cn", api: "https://acme-openapi.vpc.qoder.com.cn", infer: "https://acme-gateway.vpc.qoder.com.cn",
+			dir: "/synthetic/vpc-auth",
+		},
+		{
+			name: "flag wins env", args: []string{"-vpc-endpoint=flag"}, env: map[string]string{"QODER2API_VPC_ENDPOINT": "env"}, region: "cn",
+			web: "https://flag.vpc.qoder.com.cn", api: "https://flag-openapi.vpc.qoder.com.cn", infer: "https://flag-gateway.vpc.qoder.com.cn",
+			dir: filepath.Join(cnRoot, ".vpc", "flag", ".auth"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := parseAppConfig(tt.args, envLookup(tt.env), io.Discard)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.region != tt.region || cfg.webEndpoint != tt.web || cfg.openapiEndpoint != tt.api || cfg.inferEndpoint != tt.infer || cfg.authDir != tt.dir {
+				t.Fatalf("resolved VPC profile = region %q web %q api %q infer %q dir %q", cfg.region, cfg.webEndpoint, cfg.openapiEndpoint, cfg.inferEndpoint, cfg.authDir)
+			}
+		})
+	}
+}
+
+func TestRegionVPCResolvesWithoutParserDefaults(t *testing.T) {
+	cfg := appConfig{vpcEndpoint: "acme"}
+	if err := cfg.resolveProfile(nil); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.region != "cn" || cfg.webEndpoint != "https://acme.vpc.qoder.com.cn" ||
+		cfg.openapiEndpoint != "https://acme-openapi.vpc.qoder.com.cn" ||
+		cfg.inferEndpoint != "https://acme-gateway.vpc.qoder.com.cn" ||
+		cfg.authDir != filepath.Join(homeDir(), ".qoder-cn", ".vpc", "acme", ".auth") {
+		t.Fatalf("direct VPC profile = %#v", cfg)
+	}
+}
+
+func TestRunRejectsVPCGlobalBeforeInitialization(t *testing.T) {
+	called := false
+	err := run(context.Background(), appConfig{vpcEndpoint: "acme", region: "global"}, appDeps{
+		newProtocolServices: func(protocolHostDeps) (*protocolServices, error) { called = true; return nil, nil },
+	}, io.Discard, nil, nil)
+	if err == nil || called {
+		t.Fatalf("VPC global initialized services: called=%v err=%v", called, err)
+	}
+}
+
+func TestRegionInvalidVPCRejectedWithoutSecrets(t *testing.T) {
+	for _, tt := range []struct {
+		args []string
+		env  map[string]string
+	}{
+		{args: []string{"-vpc-endpoint="}},
+		{args: []string{"-vpc-endpoint=   "}},
+		{args: []string{"-vpc-endpoint=other.example.com"}},
+		{args: []string{"-vpc-endpoint=acme..vpc.qoder.com.cn"}},
+		{args: []string{"-vpc-endpoint=acme.vpc.qoder.com.cn.evil.test"}},
+		{args: []string{"-vpc-endpoint=ftp://acme.vpc.qoder.com.cn"}},
+		{args: []string{"-vpc-endpoint=https://user:synthetic-secret@acme.vpc.qoder.com.cn"}},
+		{args: []string{"-vpc-endpoint=https://acme.vpc.qoder.com.cn:8443"}},
+		{args: []string{"-vpc-endpoint=https://acme.vpc.qoder.com.cn/path"}},
+		{args: []string{"-vpc-endpoint=https://acme.vpc.qoder.com.cn?token=synthetic-secret"}},
+		{args: []string{"-vpc-endpoint=https://acme.vpc.qoder.com.cn/#synthetic-secret"}},
+		{args: []string{"-vpc-endpoint=acme", "-region=global"}},
+		{args: []string{"-vpc-endpoint=acme", "-region=other"}},
+		{env: map[string]string{"QODER2API_VPC_ENDPOINT": "acme", "QODER2API_REGION": "global"}},
+	} {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			var output bytes.Buffer
+			_, err := parseAppConfig(tt.args, envLookup(tt.env), &output)
+			if err == nil {
+				t.Fatal("invalid VPC configuration accepted")
+			}
+			if strings.Contains(err.Error()+output.String(), "synthetic-secret") {
+				t.Fatal("VPC configuration error disclosed secret")
+			}
+		})
+	}
+}
+
+func TestRegionVPCDefaultsToCNPAT(t *testing.T) {
+	cfg, err := parseAppConfig([]string{"-vpc-endpoint=acme"}, envLookup(map[string]string{
+		"QODERCN_PERSONAL_ACCESS_TOKEN": "fake-cn",
+		"QODER_PERSONAL_ACCESS_TOKEN":   "fake-global",
+	}), io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.region != "cn" || cfg.envPAT != "fake-cn" {
+		t.Fatalf("VPC PAT selection = region %q pat %q", cfg.region, cfg.envPAT)
+	}
+}
+
 func TestRegionInvalidConfigRejectedWithoutSecrets(t *testing.T) {
 	for _, args := range [][]string{
 		{"-region=other"}, {"-region="}, {"-endpoint=ftp://host"}, {"-web-endpoint=not-a-url"},
